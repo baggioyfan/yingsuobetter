@@ -1,0 +1,7 @@
+# 复制为 local.properties 后按需填写（该文件已被 .gitignore 忽略，不会提交）
+# 1) Android SDK 路径
+sdk.dir=/path/to/Android/Sdk
+# 2) 百度地图 AK（自行到 lbsyun.baidu.com 申请，绑定本包名与签名 SHA1）
+MAPS_API_KEY=
+# 3) 可选：百度地图安全码（mcode）
+MAPS_SAFE_CODE=

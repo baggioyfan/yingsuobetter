@@ -1,0 +1,23 @@
+# 依赖升级策略：只允许补丁/次要版本，避免主版本升级打断可复现的构建链
+# （本项目锁定 JDK 11 + Gradle 7.6.4 + AGP 7.4.2，主版本升级需要整套工具链跟着动）
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    open-pull-requests-limit: 3
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+
+  - package-ecosystem: "gradle"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    open-pull-requests-limit: 3
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "com.squareup.okhttp3:okhttp"
+        versions: ["4.x"]

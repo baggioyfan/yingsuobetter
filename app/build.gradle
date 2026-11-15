@@ -1,0 +1,147 @@
+plugins {
+    id "com.android.application"
+}
+
+// ===== 构建参数：一律从本机 / CI 环境读取，绝不写进源码 =====
+def localProps = new Properties()
+def localFile = rootProject.file('local.properties')
+if (localFile.exists()) {
+    localFile.withInputStream { localProps.load(it) }
+}
+// 优先级：local.properties > -P 属性 > 环境变量 > 默认值
+def cfg = { String key, String fallback ->
+    def v = localProps.getProperty(key)
+    if (v == null || v.trim().isEmpty()) v = project.findProperty(key)
+    if (v == null || v.toString().trim().isEmpty()) v = System.getenv(key)
+    if (v == null || v.toString().trim().isEmpty()) v = fallback
+    return v
+}
+
+// 签名密钥不随仓库分发：本地自备 keystore/GoGoGo.jks，CI 从 Secret 解码
+def keystoreFile = rootProject.file('keystore/GoGoGo.jks')
+def hasKeystore = keystoreFile.exists()
+
+android {
+    compileSdk = 32
+    buildToolsVersion = '36.0.0'
+    namespace = 'com.zcshou.gogogo'
+
+    signingConfigs {
+        if (hasKeystore) {
+            debug {
+                storeFile keystoreFile
+                storePassword cfg('KEYSTORE_PASSWORD', 'GoGoGo')
+                keyAlias cfg('KEY_ALIAS', 'GoGoKey')
+                keyPassword cfg('KEY_PASSWORD', 'GoGoGo')
+            }
+            release {
+                storeFile keystoreFile
+                storePassword cfg('KEYSTORE_PASSWORD', 'GoGoGo')
+                keyAlias cfg('KEY_ALIAS', 'GoGoKey')
+                keyPassword cfg('KEY_PASSWORD', 'GoGoGo')
+            }
+        }
+    }
+
+    defaultConfig {
+        applicationId "com.zcshou.gogogo"
+        minSdkVersion 27
+        //noinspection ExpiredTargetSdkVersion
+        targetSdkVersion 32
+        versionCode 1203
+        versionName '1.13.3' // 1.13.3: 路径点可视化/重叠防护/拖动微调 + 巡航与传送互斥 + 重启瞬移修复
+
+        // 百度地图 AK：只从构建环境读取，绝不写进源码
+        def mapsAk = cfg('MAPS_API_KEY', '')
+        def mapsSafeCode = cfg('MAPS_SAFE_CODE', '')
+        if (!mapsAk) {
+            logger.warn('[GoGoGo] 未配置 MAPS_API_KEY：地图将不可用，请参考 local.properties.example 配置')
+        }
+        buildConfigField "String", "MAPS_API_KEY", "\"${mapsAk}\""
+        buildConfigField "String", "MAPS_SAFE_CODE", "\"${mapsSafeCode}\""
+        manifestPlaceholders = [MAPS_API_KEY: mapsAk]
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+        resourceConfigurations += ['zh', 'zh-rCN', 'en', 'en-rUS']
+        ndk {
+            //noinspection ChromeOsAbiSupport
+            abiFilters "arm64-v8a"
+        }
+        signingConfig = hasKeystore ? signingConfigs.release : null
+    }
+
+    buildTypes {
+        release {
+            // Enables code shrinking, obfuscation, and optimization for only
+            // your project's release build type.
+            minifyEnabled = false
+
+            // Enables resource shrinking, which is performed by the
+            // Android Gradle plugin.
+            shrinkResources = false
+
+            // Includes the default ProGuard rules files that are packaged with
+            // the Android Gradle plugin. To learn more, go to the section about
+            // R8 configuration files.
+            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+
+            signingConfig = hasKeystore ? signingConfigs.release : null
+            multiDexEnabled = true
+        }
+        debug {
+            if (hasKeystore) {
+                signingConfig = signingConfigs.debug
+            }
+        }
+    }
+
+    // 要存取 secret value 必須要使用到一個 BuildScript 的類別，默认会从 local.properties 中获取
+    buildFeatures {
+        buildConfig = true
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_11
+        targetCompatibility JavaVersion.VERSION_11
+    }
+
+    packagingOptions {
+        jniLibs {
+            excludes += ['lib/armeabi/**']
+        }
+        resources {
+            excludes += ['lib/armeabi/**']
+        }
+    }
+
+    sourceSets {
+        main {
+            jniLibs.srcDirs = ['libs']
+        }
+    }
+
+    dependenciesInfo {
+        includeInApk = false
+        includeInBundle = false
+    }
+
+}
+
+dependencies {
+    implementation fileTree(include: ['*.jar'], dir: 'libs')
+    // AppCompat 1.5.1 开始显式依赖于 Lifecycle 2.5.1 和 SavedState 1.2.0
+    implementation 'androidx.lifecycle:lifecycle-viewmodel-ktx:2.5.1'
+    implementation 'androidx.appcompat:appcompat:1.5.1'
+    implementation 'androidx.constraintlayout:constraintlayout:2.1.4'
+    implementation 'androidx.preference:preference:1.2.1'
+    implementation 'com.google.android.material:material:1.7.0'
+    implementation 'com.squareup.okhttp3:okhttp:4.12.0'
+    implementation 'com.elvishew:xlog:1.11.1'
+    implementation 'io.noties.markwon:core:4.6.2'
+    implementation files('libs/BaiduLBS_Android.jar')
+    testImplementation 'junit:junit:4.13.2'
+    androidTestImplementation 'androidx.test.ext:junit:1.3.0'
+    androidTestImplementation 'androidx.test:runner:1.7.0'
+    androidTestImplementation('androidx.test.espresso:espresso-core:3.7.0', {
+        exclude group: 'com.android.support', module: 'support-annotations'
+    })
+}
