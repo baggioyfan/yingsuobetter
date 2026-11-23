@@ -16,11 +16,13 @@ jobs:
       - name: 检出源码
         uses: actions/checkout@v4
 
-      - name: 安装 JDK 11
+      - name: 安装 JDK 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '11'
+          # cmdline-tools 的 sdkmanager 自 2025 起要求 JDK 17+，JDK 11 会直接退出；
+          # AGP 7.4.2 在 JDK 17 下可正常工作，故统一用 17。
+          java-version: '17'
 
       - name: 安装 Android SDK 组件
         run: |
