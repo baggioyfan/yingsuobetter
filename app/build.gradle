@@ -48,8 +48,8 @@ android {
         minSdkVersion 27
         //noinspection ExpiredTargetSdkVersion
         targetSdkVersion 32
-        versionCode 1203
-        versionName '1.13.3' // 1.13.3: 路径点可视化/重叠防护/拖动微调 + 巡航与传送互斥 + 重启瞬移修复
+        versionCode 1204
+        versionName '1.13.4' // 1.13.4: 修复 mock provider 残留导致其它 App 定位失效（上游 #419）+ 更新检查改按数值比较
 
         // 百度地图 AK：只从构建环境读取，绝不写进源码
         def mapsAk = cfg('MAPS_API_KEY', '')
