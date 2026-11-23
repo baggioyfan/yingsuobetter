@@ -181,6 +181,57 @@ public class GoUtils {
     }
 
     /**
+     * 从 tag / release 标题里抽出第一段 X.Y.Z 形式的版本号。
+     * 例："v2.5.3" -> "2.5.3"，"ReleaseV1.12.3" -> "1.12.3"，"1.13.3-rc1" -> "1.13.3"。
+     */
+    public static String parseVersionNumber(String raw) {
+        if (raw == null) {
+            return "";
+        }
+        java.util.regex.Matcher matcher =
+                java.util.regex.Pattern.compile("(\\d+(?:\\.\\d+)*)").matcher(raw);
+        return matcher.find() ? matcher.group(1) : "";
+    }
+
+    /**
+     * 按数字逐段比较版本号，缺省段按 0 处理（1.13 == 1.13.0）。
+     *
+     * @return a 比 b 新返回正数，b 比 a 新返回负数，相同返回 0
+     */
+    public static int compareVersion(String a, String b) {
+        String[] partA = (a == null ? "" : a).split("\\.");
+        String[] partB = (b == null ? "" : b).split("\\.");
+        int count = Math.max(partA.length, partB.length);
+        for (int i = 0; i < count; i++) {
+            int valueA = parseVersionSegment(partA, i);
+            int valueB = parseVersionSegment(partB, i);
+            if (valueA != valueB) {
+                return Integer.compare(valueA, valueB);
+            }
+        }
+        return 0;
+    }
+
+    private static int parseVersionSegment(String[] parts, int index) {
+        if (index >= parts.length) {
+            return 0;
+        }
+        String segment = parts[index];
+        int end = 0;
+        while (end < segment.length() && Character.isDigit(segment.charAt(end))) {
+            end++;
+        }
+        if (end == 0) {
+            return 0;
+        }
+        try {
+            return Integer.parseInt(segment.substring(0, end));
+        } catch (NumberFormatException e) {
+            return 0;
+        }
+    }
+
+    /**
      * [获取应用程序版本名称]
      * @param context context
      * @return 当前应用的版本名称

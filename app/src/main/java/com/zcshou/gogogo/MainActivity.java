@@ -1267,10 +1267,18 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
         registerReceiver(mDownloadBdRcv, new IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE));
     }
 
-    private void checkUpdateVersion(boolean result) {
-        String mapApiUrl = "https://api.github.com/repos/zcshou/gogogo/releases/latest";
+    /**
+     * 更新检查指向本 fork 自己的 release。
+     *
+     * 原来指向 zcshou/gogogo，而那个仓库的 /releases/latest 至今返回 v2.1.0（资产内部版本号仍是
+     * 1.12.3），于是任何自建版本都会被判定为「有新版本」，点更新下载回来的是上游包：签名不同装不上，
+     * 真装上了也是降级。跟随上游二次开发时，把这里换成自己的仓库即可。
+     */
+    private static final String RELEASE_API_URL =
+            "https://api.github.com/repos/baggioyfan/yingsuobetter/releases/latest";
 
-        okhttp3.Request request = new okhttp3.Request.Builder().url(mapApiUrl).get().build();
+    private void checkUpdateVersion(boolean result) {
+        okhttp3.Request request = new okhttp3.Request.Builder().url(RELEASE_API_URL).get().build();
         final Call call = mOkHttpClient.newCall(request);
         call.enqueue(new Callback() {
             @Override
@@ -1289,9 +1297,18 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
                             JSONObject getRetJson = new JSONObject(resp);
                             String curVersion = GoUtils.getVersionName(MainActivity.this);
 
-                            if (curVersion != null
-                                    && (!getRetJson.getString("name").contains(curVersion)
-                                    || !getRetJson.getString("tag_name").contains(curVersion))) {
+                            // 远端版本以 tag 为准，按数字逐段比较。
+                            // 原来的判断是 name/tag 字符串 contains(curVersion)，只要 release 标题被改过
+                            // 就会永远判定为「有新版本」，下载回来的还是同一个包（上游 #412）。
+                            String tagVersion = GoUtils.parseVersionNumber(getRetJson.optString("tag_name", ""));
+                            String nameVersion = GoUtils.parseVersionNumber(getRetJson.optString("name", ""));
+                            final String newVersion = tagVersion.isEmpty() ? nameVersion : tagVersion;
+                            boolean hasNewer = curVersion != null
+                                    && !newVersion.isEmpty()
+                                    && GoUtils.compareVersion(newVersion, curVersion) > 0;
+                            String skippedVersion = sharedPreferences.getString("skipped_update_version", "");
+
+                            if (hasNewer && !newVersion.equals(skippedVersion)) {
                                 final android.app.AlertDialog alertDialog = new android.app.AlertDialog.Builder(MainActivity.this).create();
                                 alertDialog.show();
                                 alertDialog.setCancelable(false);
@@ -1314,7 +1331,13 @@ public class MainActivity extends BaseActivity implements SensorEventListener {
                                     markwon.setMarkdown(updateContent, getRetJson.getString("body"));
 
                                     Button updateCancel = window.findViewById(R.id.update_ignore);
-                                    updateCancel.setOnClickListener(v -> alertDialog.cancel());
+                                    updateCancel.setOnClickListener(v -> {
+                                        // 记住已忽略的版本，下次启动不再弹；想再检查可点菜单里的「检查更新」
+                                        sharedPreferences.edit()
+                                                .putString("skipped_update_version", newVersion)
+                                                .apply();
+                                        alertDialog.cancel();
+                                    });
 
                                     /* 这里用来保存下载地址 */
                                     JSONArray jsonArray = new JSONArray(getRetJson.getString("assets"));
