@@ -37,6 +37,7 @@ import com.elvishew.xlog.XLog;
 import com.zcshou.gogogo.MainActivity;
 import com.zcshou.gogogo.R;
 import com.zcshou.joystick.JoyStick;
+import com.zcshou.utils.GoUtils;
 import com.zcshou.utils.RoutePath;
 import com.zcshou.utils.RoutePlayer;
 
@@ -126,10 +127,11 @@ public class ServiceGo extends Service implements SensorEventListener {
 
         mLocManager = (LocationManager) this.getSystemService(Context.LOCATION_SERVICE);
 
-        removeTestProviderNetwork();
-        addTestProviderNetwork();
+        // 先清掉上次异常退出可能残留的 mock provider，再重新安装。
+        // 残留会让系统 GPS 一直处于被接管状态，其他 App 定位失效且要重启手机才能恢复（issue #419）
+        releaseTestProviders();
 
-        removeTestProviderGPS();
+        addTestProviderNetwork();
         addTestProviderGPS();
 
         initGoLocation();
@@ -169,13 +171,25 @@ public class ServiceGo extends Service implements SensorEventListener {
 
         mJoyStick.destroy();
 
-        removeTestProviderNetwork();
-        removeTestProviderGPS();
+        releaseTestProviders();
 
         unregisterReceiver(mActReceiver);
         stopForeground(STOP_FOREGROUND_REMOVE);
 
         super.onDestroy();
+    }
+
+    /**
+     * 从最近任务划掉应用时 onDestroy 不保证执行，必须在这里兜底清理。
+     * 否则系统里会挂着一个 enabled=true 但不再更新的 mock provider，
+     * 其他 App 的 GPS 会冻在旧坐标或直接判为不可用，只能重启手机恢复。
+     */
+    @Override
+    public void onTaskRemoved(Intent rootIntent) {
+        isStop = true;
+        releaseTestProviders();
+        stopSelf();
+        super.onTaskRemoved(rootIntent);
     }
 
     private void initNotification() {
@@ -431,32 +445,27 @@ public class ServiceGo extends Service implements SensorEventListener {
         return now;
     }
 
-    private void removeTestProviderGPS() {
-        try {
-            if (mLocManager.isProviderEnabled(LocationManager.GPS_PROVIDER)) {
-                mLocManager.setTestProviderEnabled(LocationManager.GPS_PROVIDER, false);
-                mLocManager.removeTestProvider(LocationManager.GPS_PROVIDER);
-            }
-        } catch (Exception e) {
-            XLog.e("SERVICEGO: ERROR - removeTestProviderGPS");
-        }
+    /**
+     * 无条件移除 GPS / NETWORK 的 mock provider。
+     *
+     * 上游做法有两个问题：先 setTestProviderEnabled(provider, false) 会把系统的真实 provider
+     * 一并置为 disabled，remove 之后不保证恢复；而 isProviderEnabled() 为 false 时整段跳过，
+     * 会让残留的 mock 永远清不掉。两者叠加的结果就是别的 App 再也拿不到系统 GPS，只能重启手机。
+     */
+    private void releaseTestProviders() {
+        GoUtils.removeTestProviderQuietly(mLocManager, LocationManager.GPS_PROVIDER);
+        GoUtils.removeTestProviderQuietly(mLocManager, LocationManager.NETWORK_PROVIDER);
     }
 
-    // 注意下面临时添加 @SuppressLint("wrongconstant") 以处理 addTestProvider 参数值的 lint 错误
-    @SuppressLint("wrongconstant")
     private void addTestProviderGPS() {
         try {
-            // 注意，由于 android api 问题，下面的参数会提示错误(以下参数是通过相关API获取的真实GPS参数，不是随便写的)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                mLocManager.addTestProvider(LocationManager.GPS_PROVIDER, false, true, false,
-                        false, true, true, true, ProviderProperties.POWER_USAGE_HIGH, ProviderProperties.ACCURACY_FINE);
-            } else {
-                mLocManager.addTestProvider(LocationManager.GPS_PROVIDER, false, true, false,
-                        false, true, true, true, Criteria.POWER_HIGH, Criteria.ACCURACY_FINE);
+            try {
+                GoUtils.addTestProviderGPS(mLocManager);
+            } catch (IllegalArgumentException ignored) {
+                // 已存在（同一进程内重复创建服务时可能发生），直接复用
             }
-            if (!mLocManager.isProviderEnabled(LocationManager.GPS_PROVIDER)) {
-                mLocManager.setTestProviderEnabled(LocationManager.GPS_PROVIDER, true);
-            }
+            // 无条件启用：系统定位总开关关着时也要让 mock 生效，否则 setTestProviderLocation 会抛异常
+            mLocManager.setTestProviderEnabled(LocationManager.GPS_PROVIDER, true);
         } catch (Exception e) {
             XLog.e("SERVICEGO: ERROR - addTestProviderGPS");
         }
@@ -497,35 +506,15 @@ public class ServiceGo extends Service implements SensorEventListener {
         }
     }
 
-    private void removeTestProviderNetwork() {
-        try {
-            if (mLocManager.isProviderEnabled(LocationManager.NETWORK_PROVIDER)) {
-                mLocManager.setTestProviderEnabled(LocationManager.NETWORK_PROVIDER, false);
-                mLocManager.removeTestProvider(LocationManager.NETWORK_PROVIDER);
-            }
-        } catch (Exception e) {
-            XLog.e("SERVICEGO: ERROR - removeTestProviderNetwork");
-        }
-    }
-
-    // 注意下面临时添加 @SuppressLint("wrongconstant") 以处理 addTestProvider 参数值的 lint 错误
-    @SuppressLint("wrongconstant")
     private void addTestProviderNetwork() {
         try {
-            // 注意，由于 android api 问题，下面的参数会提示错误(以下参数是通过相关API获取的真实NETWORK参数，不是随便写的)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                mLocManager.addTestProvider(LocationManager.NETWORK_PROVIDER, true, false,
-                        true, true, true, true,
-                        true, ProviderProperties.POWER_USAGE_LOW, ProviderProperties.ACCURACY_COARSE);
-            } else {
-                mLocManager.addTestProvider(LocationManager.NETWORK_PROVIDER, true, false,
-                        true, true, true, true,
-                        true, Criteria.POWER_LOW, Criteria.ACCURACY_COARSE);
+            try {
+                GoUtils.addTestProviderNetwork(mLocManager);
+            } catch (IllegalArgumentException ignored) {
+                // 已存在，直接复用
             }
-            if (!mLocManager.isProviderEnabled(LocationManager.NETWORK_PROVIDER)) {
-                mLocManager.setTestProviderEnabled(LocationManager.NETWORK_PROVIDER, true);
-            }
-        } catch (SecurityException e) {
+            mLocManager.setTestProviderEnabled(LocationManager.NETWORK_PROVIDER, true);
+        } catch (Exception e) {
             XLog.e("SERVICEGO: ERROR - addTestProviderNetwork");
         }
     }

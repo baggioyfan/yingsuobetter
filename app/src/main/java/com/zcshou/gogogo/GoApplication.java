@@ -1,6 +1,8 @@
 package com.zcshou.gogogo;
 
 import android.app.Application;
+import android.content.Context;
+import android.location.LocationManager;
 
 import com.baidu.location.LocationClient;
 import com.baidu.mapapi.CoordType;
@@ -15,6 +17,7 @@ import com.elvishew.xlog.printer.file.FilePrinter;
 import com.elvishew.xlog.printer.file.backup.NeverBackupStrategy;
 import com.elvishew.xlog.printer.file.clean.FileLastModifiedCleanStrategy;
 import com.elvishew.xlog.printer.file.naming.ChangelessFileNameGenerator;
+import com.zcshou.utils.GoUtils;
 
 import java.io.File;
 
@@ -38,6 +41,26 @@ public class GoApplication extends Application {
         SDKInitializer.initialize(this);
 
         SDKInitializer.setCoordType(CoordType.BD09LL);
+
+        cleanupStaleMockProviders();
+    }
+
+    /**
+     * 进程启动时清一次残留的 mock provider。
+     *
+     * 进程被系统回收、被强制停止、或用户在最近任务里划掉时，ServiceGo.onDestroy() 都可能不执行，
+     * 系统里会留下挂着的 mock GPS provider：其他 App 收到的是不再更新的旧坐标，或直接判为不可用，
+     * 过去只能重启手机才恢复（issue #419）。这里在 Application 阶段先清一次，
+     * ServiceGo.onCreate() 需要时会重新安装，顺序是安全的。
+     */
+    private void cleanupStaleMockProviders() {
+        LocationManager locationManager =
+                (LocationManager) getSystemService(Context.LOCATION_SERVICE);
+        if (locationManager == null) {
+            return;
+        }
+        GoUtils.removeTestProviderQuietly(locationManager, LocationManager.GPS_PROVIDER);
+        GoUtils.removeTestProviderQuietly(locationManager, LocationManager.NETWORK_PROVIDER);
     }
 
     /**

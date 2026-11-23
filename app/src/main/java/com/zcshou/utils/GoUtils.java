@@ -1,6 +1,7 @@
 package com.zcshou.utils;
 
 import android.annotation.SuppressLint;
+import android.app.AppOpsManager;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.ApplicationInfo;
@@ -86,45 +87,97 @@ public class GoUtils {
         return locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER);
     }
 
-    // 判断是否已在开发者选项中开启模拟位置权限（注意下面临时添加 @SuppressLint("wrongconstant") 以处理 addTestProvider 参数值的 lint 错误）
-    @SuppressLint("wrongconstant")
+    /**
+     * 判断是否已在开发者选项中把本应用设为「模拟位置信息应用」。
+     *
+     * 注意：不能再走 addTestProvider -> setTestProviderEnabled(false) -> removeTestProvider
+     * 的老路子。那个顺序会把系统的 GPS provider 一起置为 disabled，remove 之后不保证恢复，
+     * 结果是 Keep / 两步路 这类直接读系统 GPS 的应用再也拿不到定位，只能重启手机
+     * （上游 issue #419）。改为查 AppOps，完全不碰 provider 状态。
+     */
     public static boolean isAllowMockLocation(Context context) {
-        boolean canMockPosition = false;
-        int index;
-
-        try {
-            LocationManager locationManager = (LocationManager) context.getSystemService(Context.LOCATION_SERVICE);//获得LocationManager引用
-
-            List<String> list = locationManager.getAllProviders();
-            for (index = 0; index < list.size(); index++) {
-                if (list.get(index).equals(LocationManager.GPS_PROVIDER)) {
-                    break;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            AppOpsManager appOps = (AppOpsManager) context.getSystemService(Context.APP_OPS_SERVICE);
+            if (appOps != null) {
+                int mode;
+                try {
+                    mode = appOps.unsafeCheckOpNoThrow(AppOpsManager.OPSTR_MOCK_LOCATION,
+                            android.os.Process.myUid(), context.getPackageName());
+                } catch (Exception e) {
+                    mode = AppOpsManager.MODE_DEFAULT;
+                }
+                if (mode != AppOpsManager.MODE_DEFAULT) {
+                    return mode == AppOpsManager.MODE_ALLOWED;
                 }
             }
-
-            if (index < list.size()) {
-                // 注意，由于 android api 问题，下面的参数会提示错误(以下参数是通过相关API获取的真实GPS参数，不是随便写的)
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                    locationManager.addTestProvider(LocationManager.GPS_PROVIDER, false, true, false,
-                            false, true, true, true, ProviderProperties.POWER_USAGE_HIGH, ProviderProperties.ACCURACY_FINE);
-                } else {
-                    locationManager.addTestProvider(LocationManager.GPS_PROVIDER, false, true, false,
-                            false, true, true, true, Criteria.POWER_HIGH, Criteria.ACCURACY_FINE);
-                }
-                canMockPosition = true;
-            }
-
-            // 模拟位置可用
-            if (canMockPosition) {
-                // remove test provider
-                locationManager.setTestProviderEnabled(LocationManager.GPS_PROVIDER, false);
-                locationManager.removeTestProvider(LocationManager.GPS_PROVIDER);
-            }
-        } catch (SecurityException e) {
-            e.printStackTrace();
         }
 
-        return canMockPosition;
+        // 低版本或取不到 AppOps 时兜底：试装一次立刻移除，但不调用 setTestProviderEnabled
+        LocationManager locationManager = (LocationManager) context.getSystemService(Context.LOCATION_SERVICE);
+        if (locationManager == null) {
+            return false;
+        }
+        try {
+            try {
+                addTestProviderGPS(locationManager);
+            } catch (IllegalArgumentException ignored) {
+                // provider 已存在（可能是上次异常退出的残留），说明本应用具备权限
+            }
+            removeTestProviderQuietly(locationManager, LocationManager.GPS_PROVIDER);
+            return true;
+        } catch (SecurityException e) {
+            return false;
+        }
+    }
+
+    /**
+     * 安装 GPS 的 mock provider（参数取自真实 GPS provider，不要随意改动）。
+     * 调用方需自行处理 IllegalArgumentException（provider 已存在）。
+     */
+    @SuppressLint("wrongconstant")
+    public static void addTestProviderGPS(LocationManager locationManager) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            locationManager.addTestProvider(LocationManager.GPS_PROVIDER, false, true, false,
+                    false, true, true, true, ProviderProperties.POWER_USAGE_HIGH, ProviderProperties.ACCURACY_FINE);
+        } else {
+            locationManager.addTestProvider(LocationManager.GPS_PROVIDER, false, true, false,
+                    false, true, true, true, Criteria.POWER_HIGH, Criteria.ACCURACY_FINE);
+        }
+    }
+
+    /**
+     * 安装 NETWORK 的 mock provider（参数取自真实 NETWORK provider）。
+     * 调用方需自行处理 IllegalArgumentException（provider 已存在）。
+     */
+    @SuppressLint("wrongconstant")
+    public static void addTestProviderNetwork(LocationManager locationManager) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            locationManager.addTestProvider(LocationManager.NETWORK_PROVIDER, true, false,
+                    true, true, true, true, true, ProviderProperties.POWER_USAGE_LOW, ProviderProperties.ACCURACY_COARSE);
+        } else {
+            locationManager.addTestProvider(LocationManager.NETWORK_PROVIDER, true, false,
+                    true, true, true, true, true, Criteria.POWER_LOW, Criteria.ACCURACY_COARSE);
+        }
+    }
+
+    /**
+     * 无条件移除 mock provider。
+     *
+     * 刻意不先调 setTestProviderEnabled(provider, false)：那次调用会把系统 provider
+     * 一起置为 disabled，是 issue #419「跑过应用后其它 App 定位失效、要重启手机」的诱因之一。
+     * removeTestProvider 由系统还原真实 provider 并恢复其状态，不需要也不应该先 disable。
+     */
+    public static void removeTestProviderQuietly(LocationManager locationManager, String provider) {
+        if (locationManager == null) {
+            return;
+        }
+        try {
+            locationManager.removeTestProvider(provider);
+        } catch (IllegalArgumentException ignored) {
+            // 本来就没有 mock provider，属正常情况
+        } catch (SecurityException e) {
+            // 当前应用不是「模拟位置信息应用」，无权移除，忽略
+        }
     }
 
     /**
